@@ -34,8 +34,8 @@ services:
     image: dpage/pgadmin4:latest
     container_name: flaskauth-pgadmin
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@local.com
-      PGADMIN_DEFAULT_PASSWORD: admin1234
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@local.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:?Set PGADMIN_PASSWORD in .env}
     ports:
       - "8080:80"
     volumes:

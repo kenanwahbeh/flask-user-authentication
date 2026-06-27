@@ -156,8 +156,8 @@ class EditUserProfileForm(FlaskForm):
         _("Profile Image"),
         validators=[
             FileAllowed(
-                ["jpg", "jpeg", "png", "svg"],
-                _("Upload only image files (.jpg, .jpeg, .png, .svg)."),
+                ["jpg", "jpeg", "png"],
+                _("Upload only image files (.jpg, .jpeg, .png)."),
             ),
             FileSize(
                 max_size=1000000,

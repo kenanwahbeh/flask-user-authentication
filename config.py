@@ -26,8 +26,8 @@ class BaseConfig:
     BABEL_LOCALE = "en"
     BABEL_TRANSLATION_DIRECTORIES = os.path.join(BASE_DIR, "translations")
 
-    # Site secret key.
-    SECRET_KEY = os.getenv("SECRET_KEY", "my-sekret-key")
+    # Site secret key (validated at startup for non-testing configs).
+    SECRET_KEY = os.getenv("SECRET_KEY")
 
     # Default media upload folder.
     DEFAULT_UPLOAD_FOLDER = UPLOAD_FOLDER
@@ -79,10 +79,16 @@ class BaseConfig:
     # RATELIMIT_STORAGE_URI = os.getenv("RATELIMIT_STORAGE_URI", "memory://")
     RATELIMIT_STORAGE_URI = "memory://"
 
-    # Default `Salt` string for url security tokens.
-    SALT_ACCOUNT_CONFIRM = os.getenv("ACCOUNT_CONFIRM_SALT", "account_confirm_salt")
-    SALT_RESET_PASSWORD = os.getenv("RESET_PASSWORD_SALT", "reset_password_salt")
-    SALT_CHANGE_EMAIL = os.getenv("CHANGE_EMAIL_SALT", "change_email_salt")
+    # Salt strings for url security tokens (validated at startup for non-testing configs).
+    SALT_ACCOUNT_CONFIRM = os.getenv("ACCOUNT_CONFIRM_SALT")
+    SALT_RESET_PASSWORD = os.getenv("RESET_PASSWORD_SALT")
+    SALT_CHANGE_EMAIL = os.getenv("CHANGE_EMAIL_SALT")
+
+    # Session cookie security.
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = "Lax"
+    REMEMBER_COOKIE_HTTPONLY = True
+    REMEMBER_COOKIE_SAMESITE = "Lax"
 
     # Default Guest User information.
     TEST_USER_USERNAME = "testuser"
@@ -106,6 +112,9 @@ class Development(BaseConfig):
 
 
 class Production(BaseConfig):
+    SESSION_COOKIE_SECURE = True
+    REMEMBER_COOKIE_SECURE = True
+
     from sqlalchemy.engine.url import URL
     from sqlalchemy.exc import ArgumentError, OperationalError
 
@@ -129,6 +138,10 @@ class Production(BaseConfig):
 
 class Testing(BaseConfig):
     TESTING = True
+    SECRET_KEY = os.getenv("SECRET_KEY", "testing-only-secret-key")
+    SALT_ACCOUNT_CONFIRM = os.getenv("ACCOUNT_CONFIRM_SALT", "test_confirm")
+    SALT_RESET_PASSWORD = os.getenv("RESET_PASSWORD_SALT", "test_reset")
+    SALT_CHANGE_EMAIL = os.getenv("CHANGE_EMAIL_SALT", "test_email")
     SQLALCHEMY_DATABASE_URI = "sqlite:///" + os.path.join(
         BASE_DIR, "db.testing.sqlite3"
     )

@@ -218,7 +218,7 @@ def confirm_account() -> Response:
     return abort(HTTPStatus.NOT_FOUND)
 
 
-@accounts.route("/logout", methods=["GET", "POST"])
+@accounts.post("/logout")
 @login_required
 def logout() -> Response:
     """
