@@ -3,6 +3,7 @@ import click
 import typing as t
 
 from smtplib import SMTPException
+from socket import error as SocketError
 from werkzeug.exceptions import ServiceUnavailable
 
 from flask import current_app, render_template, url_for
@@ -36,13 +37,14 @@ def send_mail(subject: t.AnyStr, recipients: t.List[str], body: t.Text):
     try:
         mail.connect()
         mail.send(message)
-    except SMTPException as e:
+    except (SMTPException, SocketError, OSError) as e:
+        current_app.logger.error("Failed to send email to %s: %s", recipients, e)
         raise ServiceUnavailable(
             description=(
                 "The SMTP mail service is currently not available. "
                 "Please try later or contact the developers team."
             )
-        )
+        ) from e
 
 
 def send_confirmation_mail(user: User = None):
