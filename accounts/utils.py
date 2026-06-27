@@ -5,9 +5,23 @@ import string
 import uuid
 import typing as t
 
+from datetime import timedelta
+
+from werkzeug.exceptions import InternalServerError
 from werkzeug.utils import secure_filename
 
 from flask import current_app
+from flask_login import login_user
+
+
+# Regex pattern for strong password validation.
+# Requires: 8+ chars, at least one uppercase, one lowercase, one digit, one special char (!@#$%^&*).
+PASSWORD_STRENGTH_REGEX = (
+    r"(?=^.{8,}$)(?=.*\d)(?=.*[!@#$%^&*]+)(?![.\n])(?=.*[A-Z])(?=.*[a-z]).*$"
+)
+
+# Standard session duration for remembered logins.
+DEFAULT_LOGIN_DURATION = timedelta(days=15)
 
 
 def get_unique_id() -> t.AnyStr:
@@ -109,6 +123,95 @@ def generate_unique_username(email: str = None) -> str:
 
     suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
     return f"{base}_{suffix}"
+
+
+def safe_db_commit():
+    """
+    Commit the current database session, raising InternalServerError on failure.
+
+    Wraps the common pattern of committing with exception handling
+    that is repeated across multiple views.
+
+    :raises InternalServerError: If the database commit fails.
+    """
+    from accounts.extensions import database as db
+
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise InternalServerError
+
+
+def login_and_remember_user(user, duration: timedelta = None):
+    """
+    Log in a user with the standard "remember me" configuration.
+
+    :param user: The user instance to log in.
+    :param duration: Session duration. Defaults to DEFAULT_LOGIN_DURATION (15 days).
+    """
+    if duration is None:
+        duration = DEFAULT_LOGIN_DURATION
+
+    login_user(user, remember=True, duration=duration)
+
+
+def verify_token_or_abort(salt: str):
+    """
+    Verify a security token from the request query string.
+
+    Retrieves the 'token' query parameter, verifies it against the given salt,
+    and returns both the token record and the associated user if valid.
+
+    :param salt: The salt used when the token was generated.
+    :return: A tuple of (auth_token, user) if valid, or (None, None) if invalid.
+    """
+    from flask import request
+    from accounts.models import User
+
+    token = request.args.get("token", None)
+
+    auth_token = User.verify_token(token=token, salt=salt)
+
+    if auth_token:
+        user = User.get_user_by_id(auth_token.user_id, raise_exception=True)
+        return auth_token, user
+
+    return None, None
+
+
+def send_token_email(
+    user, salt: str, endpoint: str, template: str, subject: str, link_param: str
+):
+    """
+    Generate a token and send a templated email to the user.
+
+    Consolidates the common pattern of: generate token → build URL → render
+    template → send mail.
+
+    :param user: The User instance to send the email to.
+    :param salt: The salt for token generation.
+    :param endpoint: The Flask endpoint name for the verification URL.
+    :param template: The email template path to render.
+    :param subject: The email subject line.
+    :param link_param: The template variable name for the URL link.
+    """
+    from flask import render_template, url_for
+
+    token = user.generate_token(salt=salt)
+    link = get_full_url(url_for(endpoint, token=token))
+
+    context = render_template(
+        template,
+        username=user.username,
+        **{link_param: link},
+    )
+
+    from accounts.email_utils import send_mail
+
+    # Use change_email if set (for email change flow), otherwise primary email.
+    recipient = user.change_email or user.email
+    send_mail(subject=subject, recipients=[recipient], body=context)
 
 
 def download_and_save_image_from_url(

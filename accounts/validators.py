@@ -2,6 +2,8 @@ import re
 
 from wtforms import ValidationError
 
+from accounts.utils import PASSWORD_STRENGTH_REGEX
+
 
 class Unique(object):
     """
@@ -68,8 +70,5 @@ class StrongPassword(object):
 
     def __call__(self, form, field):
         password = field.data
-        if not re.match(
-            r"(?=^.{8,}$)(?=.*\d)(?=.*[!@#$%^&*]+)(?![.\n])(?=.*[A-Z])(?=.*[a-z]).*$",
-            password,
-        ):
+        if not re.match(PASSWORD_STRENGTH_REGEX, password):
             raise ValidationError(self.message)
