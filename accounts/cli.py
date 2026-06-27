@@ -38,7 +38,7 @@ def register_cli_command(app: Flask):
 
             click.secho(f"✔ Test user created successfully!.", fg="green")
         except Exception as e:
-            raise click.ClickException("Failed to create Test User: {e}")
+            raise click.ClickException(f"Failed to create Test User: {e}")
 
     @app.cli.command("clear-migrations")
     def clear_migrations():

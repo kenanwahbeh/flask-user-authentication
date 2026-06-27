@@ -200,8 +200,9 @@ def confirm_account() -> Response:
                 # Commit changes to the database.
                 db.session.commit()
             except Exception as e:
-                # Handle database error that occur during the account activation.
-                raise InternalServerError
+                db.session.rollback()
+                current_app.logger.error("Failed to activate account for user %s: %s", user.id, e)
+                raise InternalServerError() from e
 
             # Log the user in and set the session to remember the user for (15 days).
             login_user(user, remember=True, duration=timedelta(days=15))
@@ -339,8 +340,9 @@ def reset_password() -> Response:
                         )
                         return redirect(url_for("accounts.login"))
                 except Exception as e:
-                    # Handle database error by raising an internal server error.
-                    raise InternalServerError
+                    db.session.rollback()
+                    current_app.logger.error("Failed to reset password for user %s: %s", auth_token.user_id, e)
+                    raise InternalServerError() from e
 
             return redirect(url_for("accounts.reset_password", token=token))
 
@@ -404,8 +406,9 @@ def change_password() -> Response:
                 # Commit changes to the database.
                 db.session.commit()
             except Exception as e:
-                # Handle database error by raising an internal server error.
-                raise InternalServerError
+                db.session.rollback()
+                current_app.logger.error("Failed to change password for user %s: %s", user.id, e)
+                raise InternalServerError() from e
 
             flash(_("Your password changed successfully."), "success")
             return redirect(url_for("accounts.index"))
@@ -450,8 +453,9 @@ def change_email() -> Response:
                 # Commit changes to the database.
                 db.session.commit()
             except Exception as e:
-                # Handle database error by raising an internal server error.
-                raise InternalServerError
+                db.session.rollback()
+                current_app.logger.error("Failed to update pending email for user %s: %s", user.id, e)
+                raise InternalServerError() from e
 
             # Send a reset email to the new email address.
             send_reset_email(user)
@@ -502,8 +506,9 @@ def confirm_email() -> Response:
                 # Commit changes to the database.
                 db.session.commit()
             except Exception as e:
-                # Handle database error by raising an internal server error.
-                raise InternalServerError
+                db.session.rollback()
+                current_app.logger.error("Failed to confirm email for user %s: %s", user.id, e)
+                raise InternalServerError() from e
 
             flash(_("Your email address updated successfully."), "success")
             return redirect(url_for("accounts.index"))
@@ -577,9 +582,9 @@ def profile() -> Response:
                 # Commit changes to the database.
                 db.session.commit()
             except Exception as e:
-                # Handle database error by raising an internal server error.
-                print("Error while updating user profile:", e)
-                raise InternalServerError
+                db.session.rollback()
+                current_app.logger.error("Failed to update profile for user %s: %s", user.id, e)
+                raise InternalServerError() from e
 
             flash(_("Your profile update successfully."), "success")
             return redirect(url_for("accounts.index"))
@@ -731,12 +736,18 @@ def google_login_callback() -> Response:
                     url=picture_url, filename=f"{get_unique_id()}.jpg"
                 )
 
-                user_profile.avatar = url_for(
-                    "static", filename="assets/uploads/profile/%s" % avatar
-                )
+                if avatar:
+                    user_profile.avatar = url_for(
+                        "static", filename="assets/uploads/profile/%s" % avatar
+                    )
 
-            # Commit changes to the database.
-            db.session.commit()
+            try:
+                # Commit changes to the database.
+                db.session.commit()
+            except Exception as e:
+                db.session.rollback()
+                current_app.logger.error("Failed to save OAuth user data: %s", e)
+                raise InternalServerError() from e
 
             if not current_user.is_authenticated:
                 # Log the user in and set the session to remember the user for (15 days).

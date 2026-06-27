@@ -18,6 +18,10 @@ from werkzeug.security import (
 
 from flask import current_app, url_for
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 from flask_login.mixins import UserMixin
 
 from accounts.extensions import database as db
@@ -49,12 +53,22 @@ class BaseModel(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
 
     def delete(self):
-        db.session.delete(self)
-        db.session.commit()
+        try:
+            db.session.delete(self)
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            logger.error("Failed to delete %s (id=%s): %s", self.__class__.__name__, self.id, e)
+            raise
 
     def save(self):
-        db.session.add(self)
-        db.session.commit()
+        try:
+            db.session.add(self)
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            logger.error("Failed to save %s (id=%s): %s", self.__class__.__name__, self.id, e)
+            raise
 
 
 class User(BaseModel, UserMixin):
@@ -115,9 +129,9 @@ class User(BaseModel, UserMixin):
             user.set_password(password)
             user.save()
         except Exception as e:
-            print("Error creating user: %s" % e)
-            # Handle database error by raising an internal server error.
-            raise InternalServerError
+            db.session.rollback()
+            logger.error("Failed to create user: %s", e)
+            raise InternalServerError() from e
 
         return user
 
@@ -261,13 +275,10 @@ class User(BaseModel, UserMixin):
 
         :param provider: The name of the OAuth provider to remove.
         """
-        instance = OAuthProvider.query.filter_by(provider=provider, user_id=self.id)
+        instance = OAuthProvider.query.filter_by(provider=provider, user_id=self.id).first()
 
         if instance:
             instance.delete()
-
-            # Commit the changes to the database.
-            db.session.commit()
 
     @property
     def profile(self):
@@ -355,8 +366,7 @@ class Profile(BaseModel):
                 path = current_app.root_path + self.avatar
                 remove_existing_file(path)
             except OSError as e:
-                # Handle the case where the path is not valid.
-                print("Error getting avatar path: %s" % e)
+                current_app.logger.warning("Failed to remove old avatar at %s: %s", self.avatar, e)
 
         # Ensure the upload folder exists.
         os.makedirs(os.path.join(save_path), exist_ok=True)
@@ -373,9 +383,8 @@ class Profile(BaseModel):
             # Save the new avatar file to the local file storage.
             profile_image.save(os.path.join(save_path, filename))
         except Exception as e:
-            # Handle exceptions that might occur during file saving.
-            print("Error saving avatar: %s" % e)
-            raise InternalServerError
+            current_app.logger.error("Failed to save avatar to %s: %s", save_path, e)
+            raise InternalServerError() from e
 
     def __repr__(self):
         return "<Profile '{}'>".format(self.user.username)
@@ -423,9 +432,9 @@ class UserSecurityToken(BaseModel):
             instance = cls(**kwargs)
             instance.save()
         except Exception as e:
-            # Handle database error by raising an internal server error.
-            print("Error creating security token: %s" % e)
-            raise InternalServerError
+            db.session.rollback()
+            logger.error("Failed to create security token: %s", e)
+            raise InternalServerError() from e
 
         return instance
 
