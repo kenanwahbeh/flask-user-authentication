@@ -5,12 +5,12 @@ import typing as t
 from smtplib import SMTPException
 from werkzeug.exceptions import ServiceUnavailable
 
-from flask import current_app, render_template, url_for
+from flask import current_app
 from flask_mail import Message
 
 from accounts.extensions import mail
 from accounts.models import User
-from accounts.utils import get_full_url
+from accounts.utils import send_token_email
 
 
 def send_mail(subject: t.AnyStr, recipients: t.List[str], body: t.Text):
@@ -51,21 +51,14 @@ def send_confirmation_mail(user: User = None):
 
     :param user: The specified user for sending email.
     """
-    subject: str = "Verify Your Account"
-
-    token: str = user.generate_token(salt=current_app.config["SALT_ACCOUNT_CONFIRM"])
-
-    verification_link: str = get_full_url(
-        url_for("accounts.confirm_account", token=token)
+    send_token_email(
+        user=user,
+        salt=current_app.config["SALT_ACCOUNT_CONFIRM"],
+        endpoint="accounts.confirm_account",
+        template="emails/verify_account.txt",
+        subject="Verify Your Account",
+        link_param="verification_link",
     )
-
-    context = render_template(
-        "emails/verify_account.txt",
-        username=user.username,
-        verification_link=verification_link,
-    )
-
-    send_mail(subject=subject, recipients=[user.email], body=context)
 
 
 def send_reset_password(user: User = None):
@@ -74,17 +67,14 @@ def send_reset_password(user: User = None):
 
     :param user: The specified user for sending email.
     """
-    subject: str = "Reset Your Password"
-
-    token: str = user.generate_token(salt=current_app.config["SALT_RESET_PASSWORD"])
-
-    reset_link: str = get_full_url(url_for("accounts.reset_password", token=token))
-
-    context = render_template(
-        "emails/reset_password.txt", username=user.username, reset_link=reset_link
+    send_token_email(
+        user=user,
+        salt=current_app.config["SALT_RESET_PASSWORD"],
+        endpoint="accounts.reset_password",
+        template="emails/reset_password.txt",
+        subject="Reset Your Password",
+        link_param="reset_link",
     )
-
-    send_mail(subject=subject, recipients=[user.email], body=context)
 
 
 def send_reset_email(user: User = None):
@@ -93,18 +83,11 @@ def send_reset_email(user: User = None):
 
     :param user: The specified user for sending email.
     """
-    subject: str = "Confirm Your Email Address"
-
-    token: str = user.generate_token(salt=current_app.config["SALT_CHANGE_EMAIL"])
-
-    confirmation_link: str = get_full_url(
-        url_for("accounts.confirm_email", token=token)
+    send_token_email(
+        user=user,
+        salt=current_app.config["SALT_CHANGE_EMAIL"],
+        endpoint="accounts.confirm_email",
+        template="emails/reset_email.txt",
+        subject="Confirm Your Email Address",
+        link_param="confirmation_link",
     )
-
-    context = render_template(
-        "emails/reset_email.txt",
-        username=user.username,
-        confirmation_link=confirmation_link,
-    )
-
-    send_mail(subject=subject, recipients=[user.change_email], body=context)

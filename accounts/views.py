@@ -3,21 +3,20 @@ import re
 from datetime import timedelta
 from http import HTTPStatus
 from requests.exceptions import ConnectionError
-from werkzeug.exceptions import InternalServerError
 from authlib.integrations.flask_client import OAuthError
 from authlib.integrations.base_client.errors import TokenExpiredError
 
 from flask import Blueprint, Response
 from flask import abort, current_app, render_template, request, redirect, url_for, flash
 from flask_babel import lazy_gettext as _
-from flask_login import current_user, login_required, login_user, logout_user
+from flask_login import current_user, login_required, logout_user
 
 from accounts.decorators import authentication_redirect, guest_user_exempt
 from accounts.email_utils import (
     send_reset_password,
     send_reset_email,
 )
-from accounts.extensions import database as db, limiter, oauth
+from accounts.extensions import limiter, oauth
 from accounts.models import User, OAuthProvider
 from accounts.forms import (
     RegisterForm,
@@ -30,9 +29,13 @@ from accounts.forms import (
     DeleteAccountForm,
 )
 from accounts.utils import (
+    PASSWORD_STRENGTH_REGEX,
     get_unique_id,
     get_username_from_email,
     download_and_save_image_from_url,
+    login_and_remember_user,
+    safe_db_commit,
+    verify_token_or_abort,
 )
 
 
@@ -59,7 +62,7 @@ def login_guest_user() -> Response:
 
         if test_user:
             # Log in the guest user with a session duration of (1 day) only.
-            login_user(test_user, remember=True, duration=timedelta(days=1))
+            login_and_remember_user(test_user, duration=timedelta(days=1))
 
             flash(_("You are logged in as a Guest User."), "success")
             return redirect(url_for("accounts.index"))
@@ -135,7 +138,6 @@ def login() -> Response:
     if form.validate_on_submit():
         username = form.data.get("username", None)
         password = form.data.get("password", None)
-        remember = form.data.get("remember", True)
 
         # Attempt to authenticate the user from the database.
         user = User.authenticate(username=username, password=password)
@@ -155,8 +157,7 @@ def login() -> Response:
                 )
                 return redirect(url_for("accounts.login"))
 
-            # Log the user in and set the session to remember the user for (15 days).
-            login_user(user, remember=remember, duration=timedelta(days=15))
+            login_and_remember_user(user)
 
             flash(_("You are logged in successfully."), "success")
             return redirect(url_for("accounts.index"))
@@ -180,31 +181,21 @@ def confirm_account() -> Response:
     :return: Renders the confirmation template on GET request,
     redirects to login or index after POST.
     """
-    token: str = request.args.get("token", None)
+    token = request.args.get("token", None)
 
-    # Verify the provided token and return token instance.
-    auth_token = User.verify_token(
-        token=token, salt=current_app.config["SALT_ACCOUNT_CONFIRM"]
+    auth_token, user = verify_token_or_abort(
+        salt=current_app.config["SALT_ACCOUNT_CONFIRM"]
     )
 
     if auth_token:
-        # Retrieve the user instance associated with the token by providing user ID.
-        user = User.get_user_by_id(auth_token.user_id, raise_exception=True)
-
         if request.method == "POST":
-            try:
-                # Activate the user's account and expire the token.
-                user.active = True
-                auth_token.expire = True
+            # Activate the user's account and expire the token.
+            user.active = True
+            auth_token.expire = True
 
-                # Commit changes to the database.
-                db.session.commit()
-            except Exception as e:
-                # Handle database error that occur during the account activation.
-                raise InternalServerError
+            safe_db_commit()
 
-            # Log the user in and set the session to remember the user for (15 days).
-            login_user(user, remember=True, duration=timedelta(days=15))
+            login_and_remember_user(user)
 
             flash(
                 _(f"Welcome {user.username}, You're registered successfully."),
@@ -288,14 +279,14 @@ def reset_password() -> Response:
     :return: Renders the reset password form on GET,
     redirects to login on success, or reloads the form on failure.
     """
-    salt = current_app.config["SALT_RESET_PASSWORD"]
     token = request.args.get("token", None)
 
-    # Verify the provided token and return token instance.
-    auth_token = User.verify_token(token=token, salt=salt)
+    auth_token, user = verify_token_or_abort(
+        salt=current_app.config["SALT_RESET_PASSWORD"]
+    )
 
     if auth_token:
-        form = ResetPasswordForm()  # A form class to Reset User's Password.
+        form = ResetPasswordForm()
 
         if form.validate_on_submit():
             password = form.data.get("password")
@@ -304,43 +295,33 @@ def reset_password() -> Response:
             if not (password == confirm_password):
                 flash(_("Your new password field's did not match."), "error")
             else:
-                try:
-                    # Retrieve the user by the ID from the token and update their password.
-                    user: User = User.get_user_by_id(
-                        auth_token.user_id, raise_exception=True
+                if user.check_password(password):
+                    flash(
+                        _(
+                            "Your new password cannot be the same as the previous one."
+                        ),
+                        "error",
                     )
+                else:
+                    user.set_password(password)
 
-                    if user.check_password(password):
+                    # Mark the token as expired after the password is reset.
+                    auth_token.expire = True
+
+                    safe_db_commit()
+
+                    if current_user.is_authenticated:
                         flash(
-                            _(
-                                "Your new password cannot be the same as the previous one."
-                            ),
-                            "error",
-                        )
-                    else:
-                        user.set_password(password)
-
-                        # Mark the token as expired after the password is reset.
-                        auth_token.expire = True
-
-                        # Commit changes to the database.
-                        db.session.commit()
-
-                        if current_user.is_authenticated:
-                            flash(
-                                _("Your password is changed successfully."),
-                                "success",
-                            )
-                            return redirect(url_for("accounts.index"))
-
-                        flash(
-                            _("Your password reset successfully. Please login."),
+                            _("Your password is changed successfully."),
                             "success",
                         )
-                        return redirect(url_for("accounts.login"))
-                except Exception as e:
-                    # Handle database error by raising an internal server error.
-                    raise InternalServerError
+                        return redirect(url_for("accounts.index"))
+
+                    flash(
+                        _("Your password reset successfully. Please login."),
+                        "success",
+                    )
+                    return redirect(url_for("accounts.login"))
 
             return redirect(url_for("accounts.reset_password", token=token))
 
@@ -379,16 +360,11 @@ def change_password() -> Response:
         # Retrieve the fresh user instance from the database.
         user = User.get_user_by_id(current_user.id, raise_exception=True)
 
-        # Regex pattern to validate password strength.
-        re_pattern = (
-            r"(?=^.{8,}$)(?=.*\d)(?=.*[!@#$%^&*]+)(?![.\n])(?=.*[A-Z])(?=.*[a-z]).*$"
-        )
-
         if not user.check_password(old_password):
             flash(_("Your old password is incorrect."), "error")
         elif not (new_password == confirm_password):
             flash(_("Your new password field's not match."), "error")
-        elif not re.match(re_pattern, new_password):
+        elif not re.match(PASSWORD_STRENGTH_REGEX, new_password):
             flash(
                 _(
                     "Please choose a strong password. It contains at least one "
@@ -397,15 +373,9 @@ def change_password() -> Response:
                 "warning",
             )
         else:
-            try:
-                # Update the user's password.
-                user.set_password(new_password)
+            user.set_password(new_password)
 
-                # Commit changes to the database.
-                db.session.commit()
-            except Exception as e:
-                # Handle database error by raising an internal server error.
-                raise InternalServerError
+            safe_db_commit()
 
             flash(_("Your password changed successfully."), "success")
             return redirect(url_for("accounts.index"))
@@ -443,15 +413,10 @@ def change_email() -> Response:
         elif User.query.filter(User.email == email, User.id != user.id).first():
             flash(_("Email address is already registered with us."), "warning")
         else:
-            try:
-                # Update the new email as the pending email change.
-                user.change_email = email
+            # Update the new email as the pending email change.
+            user.change_email = email
 
-                # Commit changes to the database.
-                db.session.commit()
-            except Exception as e:
-                # Handle database error by raising an internal server error.
-                raise InternalServerError
+            safe_db_commit()
 
             # Send a reset email to the new email address.
             send_reset_email(user)
@@ -481,29 +446,20 @@ def confirm_email() -> Response:
     """
     token = request.args.get("token", None)
 
-    # Verify the provided token and return token instance.
-    auth_token = User.verify_token(
-        token=token, salt=current_app.config["SALT_CHANGE_EMAIL"]
+    auth_token, user = verify_token_or_abort(
+        salt=current_app.config["SALT_CHANGE_EMAIL"]
     )
 
     if auth_token:
         if request.method == "POST":
-            # Retrieve the user by the ID from the token and update email details.
-            user = User.get_user_by_id(auth_token.user_id, raise_exception=True)
+            # Update new email address to user.
+            user.email = user.change_email
+            user.change_email = None
 
-            try:
-                # Update new email address to user.
-                user.email = user.change_email
-                user.change_email = None
+            # Mark the token as expired after the new email is set.
+            auth_token.expire = True
 
-                # Mark the token as expired after the new email is set.
-                auth_token.expire = True
-
-                # Commit changes to the database.
-                db.session.commit()
-            except Exception as e:
-                # Handle database error by raising an internal server error.
-                raise InternalServerError
+            safe_db_commit()
 
             flash(_("Your email address updated successfully."), "success")
             return redirect(url_for("accounts.index"))
@@ -563,23 +519,17 @@ def profile() -> Response:
         if username_exist:
             flash(_("Username already exists. Choose another."), "error")
         else:
-            try:
-                # Update the user's profile details.
-                user.username = username
-                user.first_name = first_name
-                user.last_name = last_name
-                user.profile.bio = about
+            # Update the user's profile details.
+            user.username = username
+            user.first_name = first_name
+            user.last_name = last_name
+            user.profile.bio = about
 
-                # Handle profile image upload if provided.
-                if profile_image and getattr(profile_image, "filename"):
-                    user.profile.set_avatar(profile_image)
+            # Handle profile image upload if provided.
+            if profile_image and getattr(profile_image, "filename"):
+                user.profile.set_avatar(profile_image)
 
-                # Commit changes to the database.
-                db.session.commit()
-            except Exception as e:
-                # Handle database error by raising an internal server error.
-                print("Error while updating user profile:", e)
-                raise InternalServerError
+            safe_db_commit()
 
             flash(_("Your profile update successfully."), "success")
             return redirect(url_for("accounts.index"))
@@ -735,12 +685,10 @@ def google_login_callback() -> Response:
                     "static", filename="assets/uploads/profile/%s" % avatar
                 )
 
-            # Commit changes to the database.
-            db.session.commit()
+            safe_db_commit()
 
             if not current_user.is_authenticated:
-                # Log the user in and set the session to remember the user for (15 days).
-                login_user(user, remember=True, duration=timedelta(days=15))
+                login_and_remember_user(user)
 
                 flash(_("You are logged in successfully."), "success")
                 return redirect(url_for("accounts.index"))
