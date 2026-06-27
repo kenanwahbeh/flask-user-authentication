@@ -12,9 +12,21 @@ from werkzeug.exceptions import (
     TooManyRequests,
 )
 
+from urllib.parse import urlparse
+
 from flask import Flask, make_response
 from flask import redirect, request, session, url_for
 from flask_babel import lazy_gettext as _
+
+
+def _safe_redirect_url(fallback):
+    """Return request.referrer only if it shares the same host; otherwise use fallback."""
+    ref = request.referrer
+    if ref:
+        parsed = urlparse(ref)
+        if parsed.netloc == "" or parsed.netloc == urlparse(request.host_url).netloc:
+            return ref
+    return fallback
 
 
 def create_app(config_type):
@@ -64,10 +76,11 @@ def create_app(config_type):
             session["_theme_preference"] = theme
             app.config["BOOTSTRAP_BOOTSWATCH_THEME"] = theme
 
-        response = make_response(
-            redirect(request.referrer or url_for("accounts.index"))
+        next_url = _safe_redirect_url(url_for("accounts.index"))
+        response = make_response(redirect(next_url))
+        response.set_cookie(
+            "theme", theme, max_age=60 * 60 * 24 * 15, httponly=True, samesite="Lax"
         )
-        response.set_cookie("theme", theme, max_age=60 * 60 * 24 * 15)  # 15 days
         return response
 
     @app.get("/change-lang")
@@ -86,10 +99,11 @@ def create_app(config_type):
             app.config["BABEL_LOCALE"] = app.config["BABEL_DEFAULT_LOCALE"]
             lang = app.config["BABEL_DEFAULT_LOCALE"]
 
-        # set language in response cookie
-        next_url = request.referrer or url_for("accounts.index")
+        next_url = _safe_redirect_url(url_for("accounts.index"))
         response = make_response(redirect(next_url))
-        response.set_cookie("lang", lang, max_age=60 * 60 * 24 * 15)  # 15 days
+        response.set_cookie(
+            "lang", lang, max_age=60 * 60 * 24 * 15, httponly=True, samesite="Lax"
+        )
 
         return response
 
@@ -123,6 +137,20 @@ def config_application(app: Flask, config_type):
 
     # Application configuration from object.
     app.config.from_object(config)
+
+    if not app.config.get("TESTING"):
+        if not app.config.get("SECRET_KEY"):
+            raise RuntimeError(
+                "SECRET_KEY environment variable is not set. "
+                "Generate one with: python -c 'import secrets; print(secrets.token_hex(32))'"
+            )
+        salt_keys = ["SALT_ACCOUNT_CONFIRM", "SALT_RESET_PASSWORD", "SALT_CHANGE_EMAIL"]
+        missing = [k for k in salt_keys if not app.config.get(k)]
+        if missing:
+            raise RuntimeError(
+                "Security salt environment variables must all be set: "
+                + ", ".join(missing)
+            )
 
 
 def config_blueprint(app: Flask):
